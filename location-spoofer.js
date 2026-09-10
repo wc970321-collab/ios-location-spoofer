@@ -1466,7 +1466,12 @@
     GB: { latitude: 51.5074, longitude: -0.1278, city: "London" },
     SG: { latitude: 1.3521, longitude: 103.8198, city: "Singapore" },
     US: { latitude: 40.7128, longitude: -74.0060, city: "New York" },
-    HK: { latitude: 22.3193, longitude: 114.1694, city: "Hong Kong" }
+    HK: { latitude: 22.3193, longitude: 114.1694, city: "Hong Kong" },
+    TW: { latitude: 25.0330, longitude: 121.5654, city: "Taipei" },
+    MY: { latitude: 3.1390, longitude: 101.6869, city: "Kuala Lumpur" },
+    MO: { latitude: 22.1987, longitude: 113.5439, city: "Macau" },
+    DE: { latitude: 52.5200, longitude: 13.4050, city: "Berlin" },
+    KR: { latitude: 37.5665, longitude: 126.9780, city: "Seoul" }
   };
 
   function resolveAutoLocation(config, callback) {
