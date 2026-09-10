@@ -15,6 +15,8 @@
   var DEFAULT_CONFIG = {
     enabled: true,
     mode: "response",
+    autoLocation: false,
+    geoTimeoutMs: 4000,
     latitude: 37.3349,
     longitude: -122.00902,
     horizontalAccuracy: 39,
@@ -518,6 +520,10 @@
       }
     }
 
+    cfg.autoLocation = parseBoolean(cfg.autoLocation, false);
+    cfg.geoTimeoutMs = Number(cfg.geoTimeoutMs);
+    if (!Number.isFinite(cfg.geoTimeoutMs)) cfg.geoTimeoutMs = 4000;
+    cfg.geoTimeoutMs = Math.max(500, Math.min(10000, cfg.geoTimeoutMs));
     cfg.enabled = parseBoolean(cfg.enabled, true);
     cfg.failOpen = parseBoolean(cfg.failOpen, true);
     var mode = String(cfg.mode || "response").toLowerCase();
@@ -965,6 +971,8 @@
       "dumpRaw",
       "dumpHeaders",
       "prepareHeaders",
+      "autoLocation",
+      "geoTimeoutMs",
       "rawLimit"
     ];
     var configUrlKey = "configUrl=";
@@ -1316,6 +1324,8 @@
       "dumpRaw",
       "dumpHeaders",
       "prepareHeaders",
+      "autoLocation",
+      "geoTimeoutMs",
       "rawLimit"
     ];
 
@@ -1448,7 +1458,97 @@
     return { cfg: cfg, configUrl: configUrl, debug: debug };
   }
 
+  // Auto mode deliberately does not cache country results: a TTL cache can
+  // keep the previous country's coordinates after the selected proxy changes.
+  // Route ipwho.is through the same proxy/group whose exit you want to follow.
+  var COUNTRY_LOCATIONS = {
+    JP: { latitude: 35.6762, longitude: 139.6503, city: "Tokyo" },
+    GB: { latitude: 51.5074, longitude: -0.1278, city: "London" },
+    SG: { latitude: 1.3521, longitude: 103.8198, city: "Singapore" },
+    US: { latitude: 40.7128, longitude: -74.0060, city: "New York" },
+    HK: { latitude: 22.3193, longitude: 114.1694, city: "Hong Kong" }
+  };
+
+  function resolveAutoLocation(config, callback) {
+    if (!config.autoLocation || !config.enabled || config.mode !== "response") {
+      callback(config);
+      return;
+    }
+    var completed = false;
+    var timer = null;
+    function finish(country, reason) {
+      if (completed) return;
+      completed = true;
+      if (timer !== null) clearTimeout(timer);
+      var target = Object.prototype.hasOwnProperty.call(COUNTRY_LOCATIONS, country)
+        ? COUNTRY_LOCATIONS[country] : null;
+      var result = target ? mergeConfig(config, {
+        latitude: target.latitude, longitude: target.longitude
+      }) : config;
+      if (parseBoolean(config.debug, false)) {
+        console.log("Location spoofer auto: " + (target
+          ? country + " -> " + target.city
+          : "fixed-coordinate fallback (" + reason + ")") +
+          " -> " + result.latitude + "," + result.longitude);
+      }
+      callback(result);
+    }
+    if (typeof $httpClient === "undefined" || !$httpClient.get) {
+      finish("", "http client unavailable");
+      return;
+    }
+    // Own deadline avoids depending on a runtime-specific HTTP timeout unit.
+    // A late or repeated HTTP callback cannot rewrite twice or change fallback.
+    timer = setTimeout(function () { finish("", "lookup timeout"); }, config.geoTimeoutMs);
+    try {
+      $httpClient.get({
+        url: "https://ipwho.is/",
+        headers: { "Accept": "application/json", "Cache-Control": "no-cache" }
+      }, function (error, response, body) {
+        if (completed) return;
+        var country = "";
+        var reason = "invalid lookup response";
+        try {
+          var status = response && (response.statusCode || response.status);
+          var match = String(status || "").match(/(?:^|\s)([1-5][0-9]{2})(?:\s|$)/);
+          if (error) {
+            reason = "network error";
+          } else if (!match || Number(match[1]) !== 200) {
+            reason = "HTTP " + String(status || "unknown");
+          } else {
+            var data = JSON.parse(body);
+            if (data && data.success === true && typeof data.ip === "string" && data.ip) {
+              country = String(data.country_code || "").trim().toUpperCase();
+              reason = "unsupported or missing country " + country;
+            }
+          }
+        } catch (err) {
+          reason = "invalid lookup JSON";
+        }
+        finish(country, reason);
+      });
+    } catch (err) {
+      if (completed) throw err;
+      finish("", "lookup exception");
+    }
+  }
+
   function loadRuntimeConfig(callback) {
+    var localConfig = mergeConfig(DEFAULT_CONFIG, configFromArgs(readScriptArguments()));
+    if (parseBoolean(localConfig.autoLocation, false)) {
+      // Auto mode uses local coordinates as fallback, never address/remote cache.
+      // With autoLocation=false the complete original configuration path remains.
+      var autoConfig;
+      try {
+        autoConfig = normalizeConfig(localConfig);
+      } catch (err) {
+        console.log("Location spoofer auto config invalid: " + err.message);
+        donePassThrough();
+        return;
+      }
+      resolveAutoLocation(autoConfig, callback);
+      return;
+    }
     var loaded = loadRuntimeConfigSync();
     var cfg = loaded.cfg;
     var configUrl = loaded.configUrl;
@@ -2088,6 +2188,8 @@
   }
 
   var api = {
+    COUNTRY_LOCATIONS: COUNTRY_LOCATIONS,
+    resolveAutoLocation: resolveAutoLocation,
     DEFAULT_CONFIG: DEFAULT_CONFIG,
     APPLE_WLOC_PREFIX: APPLE_WLOC_PREFIX,
     APPLE_WLOC_MARKER: APPLE_WLOC_MARKER,
